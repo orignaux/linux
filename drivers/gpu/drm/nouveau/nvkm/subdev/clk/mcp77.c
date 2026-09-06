@@ -292,6 +292,39 @@ mcp77_clk_calc(struct nvkm_clk *base, struct nvkm_cstate *cstate)
 	return 0;
 }
 
+static void
+mcp77_clk_wait_vblank(struct nvkm_device *device)
+{
+	u32 heads, res, vblanks;
+	int i, head_sync = -1;
+	u32 max_px = 0;
+
+	heads = nvkm_rd32(device, 0x610050);
+	for (i = 0; i < 2; i++) {
+		if (heads & (2 << (i << 3))) {
+			u32 x, y;
+			res = nvkm_rd32(device, 0x610b40 + (0x540 * i));
+			y = (res & 0xffff0000) >> 16;
+			x = res & 0x0000ffff;
+			if ((x * y) > max_px) {
+				max_px = x * y;
+				head_sync = i;
+			}
+		}
+	}
+
+	if (head_sync < 0)
+		return;
+
+	vblanks = (nvkm_rd32(device, 0x610af0 + (head_sync * 0x540)) & 0xffff0000) >> 16;
+
+	nvkm_msec(device, 2000,
+		u32 vline = nvkm_rd32(device, 0x616340 + (head_sync * 0x800)) & 0x0000ffff;
+		if (vline >= vblanks)
+			break;
+	);
+}
+
 static int
 mcp77_clk_prog(struct nvkm_clk *base)
 {
@@ -306,6 +339,8 @@ mcp77_clk_prog(struct nvkm_clk *base)
 	ret = gt215_clk_pre(&clk->base, f);
 	if (ret)
 		goto out;
+
+	mcp77_clk_wait_vblank(device);
 
 	/* First switch to safe clocks: href */
 	mast = nvkm_mask(device, 0xc054, 0x03400e70, 0x03400640);
@@ -366,6 +401,8 @@ mcp77_clk_prog(struct nvkm_clk *base)
 	}
 
 	nvkm_wr32(device, 0xc054, mast);
+
+	mcp77_clk_wait_vblank(device);
 
 resume:
 	/* Disable some PLLs and dividers when unused */

@@ -208,6 +208,18 @@ nv50_sor_power_wait(struct nvkm_device *device, u32 soff)
 	);
 }
 
+static void
+nv50_disp_vpll_power(struct nvkm_device *device, int head, bool on)
+{
+	const u32 vpll_ctrl = 0x614100 + head * 0x800;
+	const u32 stage_disable = 0xc0000000; /* bit 31 = STAGE2_DISABLE, bit 30 = STAGE1_DISABLE */
+
+	if (on)
+		nvkm_mask(device, vpll_ctrl, stage_disable, 0x00000000);
+	else
+		nvkm_mask(device, vpll_ctrl, stage_disable, stage_disable);
+}
+
 void
 nv50_sor_power(struct nvkm_ior *sor, bool normal, bool pu, bool data, bool vsync, bool hsync)
 {
@@ -217,6 +229,9 @@ nv50_sor_power(struct nvkm_ior *sor, bool normal, bool pu, bool data, bool vsync
 	const u32 state = 0x80000000 | (0x00000001 * !!pu) << shift;
 	const u32 field = 0x80000000 | (0x00000001 << shift);
 
+	if (normal)
+		nv50_disp_vpll_power(device, sor->id, true);
+
 	nv50_sor_power_wait(device, soff);
 	nvkm_mask(device, 0x61c004 + soff, field, state);
 	nv50_sor_power_wait(device, soff);
@@ -225,6 +240,20 @@ nv50_sor_power(struct nvkm_ior *sor, bool normal, bool pu, bool data, bool vsync
 		if (!(nvkm_rd32(device, 0x61c030 + soff) & 0x10000000))
 			break;
 	);
+
+	if (!normal) {
+		/* Check if all other SORs are off, then power down VPLL */
+		bool any_on = false;
+		int j;
+		for (j = 0; j < sor->disp->sor.nr; j++) {
+			if (j == sor->id)
+				continue;
+			if (nvkm_rd32(device, 0x61c004 + (j * 0x800)) & 0x80000000)
+				any_on = true;
+		}
+		if (!any_on)
+			nv50_disp_vpll_power(device, 0, false);
+	}
 }
 
 void
